@@ -3,6 +3,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { logger } from './logger.js';
 
+const SAFE_SRC = ['130.89.107.163'];
 const VULNERABLE_USERS = [
   {
     name: 'admin',
@@ -60,7 +61,10 @@ async function combineLogs() {
 function filterIntrusions() {
   const lines = fs.readFileSync(OUTPUT_FILE, 'utf8').split('\n');
   const intrusions = [];
+  const summary = {};
+  const srcIPs = new Set();
   const users = new Set(VULNERABLE_USERS.map(({ name }) => name));
+  const ips = new Set(SAFE_SRC);
 
   const log = /^(?<timestamp>\S+) .*sshd\[.*\]: (?<message>.+)$/;
   const success =
@@ -83,7 +87,7 @@ function filterIntrusions() {
       type = 'failure';
     } else continue;
 
-    if (!users.has(username)) continue;
+    if (!users.has(username) || ips.has(ip)) continue;
 
     const pick = VULNERABLE_USERS.find(({ name }) => name === username);
     const usedCreds = method === 'password';
@@ -93,12 +97,26 @@ function filterIntrusions() {
       ip,
       type,
       methods: usedCreds ? 'credentials' : 'public-key',
-      ...(usedCreds && { password: pick.pw }),
+      ...(usedCreds && type === 'success' && { password: pick.pw }),
     });
+
+    srcIPs.add(ip);
   }
 
-  fs.writeFileSync(SUMMARY_FILE, JSON.stringify(intrusions, null, 2));
-  return intrusions;
+  const sources = Array.from(srcIPs);
+  fs.writeFileSync(
+    SUMMARY_FILE,
+    JSON.stringify(
+      {
+        intrusions,
+        summary: { ips: sources, distinctAttackers: sources.length },
+      },
+      null,
+      2
+    )
+  );
+
+  return { intrusions, sources };
 }
 
 async function analyze() {
@@ -106,8 +124,9 @@ async function analyze() {
     logger.info('Combining logs...');
     await combineLogs();
     logger.info('Filtering intrusions...');
-    const intrusions = filterIntrusions();
+    const { intrusions, sources } = filterIntrusions();
     logger.info(`Found ${intrusions.length} intrusions`);
+    logger.info(`By ${sources.length} distinct IP Addresses`);
   } catch (error) {
     logger.error('Error:', error);
   }
