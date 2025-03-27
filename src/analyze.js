@@ -61,10 +61,9 @@ async function combineLogs() {
 function filterIntrusions() {
   const lines = fs.readFileSync(OUTPUT_FILE, 'utf8').split('\n');
   const intrusions = [];
-  const summary = {};
-  const srcIPs = new Set();
+  const attackers = new Map();
   const users = new Set(VULNERABLE_USERS.map(({ name }) => name));
-  const ips = new Set(SAFE_SRC);
+  const safeIps = new Set(SAFE_SRC);
 
   const log = /^(?<timestamp>\S+) .*sshd\[.*\]: (?<message>.+)$/;
   const success =
@@ -87,10 +86,11 @@ function filterIntrusions() {
       type = 'failure';
     } else continue;
 
-    if (!users.has(username) || ips.has(ip)) continue;
+    if (!users.has(username) || safeIps.has(ip)) continue;
 
     const pick = VULNERABLE_USERS.find(({ name }) => name === username);
     const usedCreds = method === 'password';
+
     intrusions.push({
       timestamp,
       username,
@@ -100,23 +100,24 @@ function filterIntrusions() {
       ...(usedCreds && type === 'success' && { password: pick.pw }),
     });
 
-    srcIPs.add(ip);
+    // Count per attacker IP
+    if (!attackers.has(ip)) {
+      attackers.set(ip, 1);
+    } else {
+      attackers.set(ip, attackers.get(ip) + 1);
+    }
   }
 
-  const sources = Array.from(srcIPs);
-  fs.writeFileSync(
-    SUMMARY_FILE,
-    JSON.stringify(
-      {
-        intrusions,
-        summary: { ips: sources, distinctAttackers: sources.length },
-      },
-      null,
-      2
-    )
-  );
+  const summaryData = {
+    intrusions,
+    summary: {
+      ips: Object.fromEntries(attackers),
+      distinctAttackers: attackers.size,
+    },
+  };
 
-  return { intrusions, sources };
+  fs.writeFileSync(SUMMARY_FILE, JSON.stringify(summaryData, null, 2));
+  return { intrusions, sources: Array.from(attackers.keys()) };
 }
 
 async function analyze() {
