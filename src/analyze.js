@@ -120,6 +120,59 @@ function filterIntrusions() {
   return { intrusions, sources: Array.from(attackers.keys()) };
 }
 
+async function fetchGeolocation(ip) {
+  const response = await fetch(`http://ip-api.com/json/${ip}`);
+  if (!response.ok) {
+    throw new Error(`Failed to fetch geolocation data for IP: ${ip}`);
+  }
+  return response.json();
+}
+
+async function analyzeIntrusions(intrusions) {
+  const ipFrequency = {};
+  const geolocationData = {};
+
+  intrusions.forEach(({ ip }) => {
+    ipFrequency[ip] = (ipFrequency[ip] || 0) + 1;
+  });
+
+  for (const ip of Object.keys(ipFrequency)) {
+    try {
+      const data = await fetchGeolocation(ip);
+      geolocationData[ip] = data;
+    } catch (error) {
+      console.error(error.message);
+    }
+  }
+
+  const countryStats = {};
+  for (const [ip, data] of Object.entries(geolocationData)) {
+    const country = data.country || 'Unknown';
+    if (!countryStats[country]) {
+      countryStats[country] = { count: 0, ips: new Set() };
+    }
+    countryStats[country].count += ipFrequency[ip];
+    countryStats[country].ips.add(ip);
+  }
+
+  const summary = {
+    totalIntrusions: intrusions.length,
+    uniqueIPs: Object.keys(ipFrequency).length,
+    intrusionsByCountry: {},
+  };
+
+  for (const [country, stats] of Object.entries(countryStats)) {
+    summary.intrusionsByCountry[country] = {
+      totalIntrusions: stats.count,
+      uniqueIPs: Array.from(stats.ips),
+    };
+  }
+
+  console.log(summary);
+  logger.info('Intrusion Analysis Summary:', JSON.stringify(summary, null, 2));
+  fs.writeFileSync('intrusion_summary.json', JSON.stringify(summary, null, 2));
+}
+
 async function analyze() {
   try {
     logger.info('Combining logs...');
@@ -128,6 +181,7 @@ async function analyze() {
     const { intrusions, sources } = filterIntrusions();
     logger.info(`Found ${intrusions.length} intrusions`);
     logger.info(`By ${sources.length} distinct IP Addresses`);
+    analyzeIntrusions(intrusions);
   } catch (error) {
     logger.error('Error:', error);
   }
